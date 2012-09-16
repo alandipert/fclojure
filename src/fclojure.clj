@@ -27,7 +27,7 @@
 
 (def vars-to-import
   "Vars from clojure.core to refer into the global fclojure environment."
-  (set/union '#{* + - < = > assoc conj cons first list list* println rest second seq vector}
+  (set/union '#{* + - < = > assoc conj concat cons first list list* list? println rest second seq vector}
              required-functions))
 
 (defn init-globals
@@ -154,6 +154,7 @@
           recur   (if-let [f (find-nearest-fn env)]
                      (apply f (map (partial eval env) args))
                      (throw (Exception. (format "No binding above %s found." (pr-str form)))))
+          apply   (apply* (first args) env (eval env (second args)))
           (apply* op env args)))
 
       (vector? form)
@@ -227,37 +228,56 @@
                             (list 'ffn params
                                   (cons 'eval body)))))))
 
-   (defmacro defn [name params body]
+   (def map
+     (fn [f [x & xs]]
+       (if x (cons (f x) (map f xs)))))
+
+   (def constantly
+     (fn [x] (fn [& _] x)))
+
+   (def count
+     (fn [xs]
+       (apply + (map (constantly 1) xs))))
+
+   (defmacro defn [name params & body]
      (list 'def name
-           (list 'fn params body)))
+           (cons 'fn (if (= 1 (count body))
+                       (list params (first body))
+                       (cons params body)))))
 
-   (defn inc [n] (+ n 1))
 
-   (def do*
-     (ffn [res [expr & more]]
-          (if expr
-            (recur (eval expr) more)
-            res)))
+   (defmacro deffn [name params & body]
+     (list 'def name
+           (cons 'ffn (if (= 1 (count body))
+                        (list params (first body))
+                        (cons params body)))))
 
-   (defmacro do [& body]
-     (list 'do* nil body))
+   (deffn do* [last [x & exprs]]
+     (if x (recur (eval x) exprs) last))
 
-   (def if-let
-     (ffn [[name test] then else]
-          (let [res (eval test)]
-            (eval (if res
-                    (list 'let (vector name res) then)
-                    else)))))
+   (deffn do [& exprs]
+     (eval (list 'do* nil exprs)))
 
-   (defn map [f [x & xs]]
-     (if x (cons (f x) (map f xs))))
+   (defn walk [inner outer form]
+     (if (list? form)
+       (outer (apply list (map inner form)))
+       (outer form)))
 
-   (def quasiquote*
-     (ffn [x]
-          (if (seq x)
-            (if (= (first x) 'unquote)
-              (eval (second x))
-              (recur (rest x)))
-            x)))
+   (defn partial [f & some-args]
+     (fn [& args] (apply f (concat some-args args))))
+
+   (defn postwalk [f form]
+     (walk (partial postwalk f) f form))
+
+   (def quasiquote
+     (ffn [form]
+          (postwalk (fn [x]
+                      (if (list? x)
+                        (if (= (first x) 'clojure.core/unquote)
+                          (eval (second x))
+                          x)
+                        x))
+                    form)))
+
    )
   )
