@@ -160,7 +160,10 @@
       (mapv (partial eval env) form)
 
       (map? form)
-      (into {} (map (fn [[k v]] [k (eval env k)]) form))
+      (into {} (map (fn [[k v]] [(eval env k) (eval env v)]) form))
+
+      (set? form)
+      (into #{} (map (partial eval env) form))
 
       (symbol? form)
       (resolve env form)
@@ -175,7 +178,9 @@
     (loop []
       (print "> ")
       (flush)
-      (when-let [form (read)]
+      (when-let [form (try (read)
+                           (catch Exception e
+                             (format "Error reading: %s" (.getMessage e))))]
         (when (not= form :q)
           (try
             (color/with-color :green
@@ -199,7 +204,7 @@
        (cons form (read-file rdr))))))
 
 (defn eval-file
-  "Evaluates the FClojure file, string or URI f."
+  "Evaluates the fclojure file, string or URI f."
   [f]
   (with-open [rdr (java.io.PushbackReader. (io/reader f))]
     (binding [*globals* (init-globals)]
