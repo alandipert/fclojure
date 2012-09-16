@@ -1,0 +1,2 @@
+#!/bin/bash
+java -cp $(lein classpath) jline.ConsoleRunner clojure.main -e "(require 'fclojure)(fclojure/-main)"
