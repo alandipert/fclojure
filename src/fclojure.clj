@@ -16,7 +16,7 @@
   [msg]
   (color/with-color :red
     (if (instance? Exception msg)
-      (.printStackTrace msg)
+      (println (.getMessage msg))
       (println msg))))
 
 ;;; Environment and Scopes
@@ -27,7 +27,7 @@
 
 (def vars-to-import
   "Vars from clojure.core to refer into the global fclojure environment."
-  (set/union '#{* + - < = > assoc conj concat cons first list list* list? println rest second seq vector}
+  (set/union '#{* + - <= = >= assoc conj concat cons first list list* list? println rest second seq vector}
              required-functions))
 
 (defn init-globals
@@ -91,21 +91,22 @@
 
 (defn build-bindings
   "Returns a map of bindings after destructuring."
-  [env params args]
+  [params args]
   (let [destructures (partition 2 (destructure [(vec params) (list 'quote (vec args))]))
         build-bindings (fn [new-bindings [name val]]
                          (assoc new-bindings name
-                                (eval (update-in env [:bindings] merge new-bindings) val)))]
+                                (eval (update-in new-bindings [:bindings] merge new-bindings) val)))]
     (reduce build-bindings {} destructures)))
 
 (defn mkfn
   "Returns a function object. Does not evaluate its arguments; apply*
   might have already."
-  [env [params & body]]
-  (fn self [& args]
-    (let [bindings (build-bindings env params args)
-          locals (mkenv self env bindings)]
-      (peek (mapv (partial eval locals) body)))))
+  [static-env [params & body]]
+  (fn self [runtime-env & args]
+    (let [bindings (build-bindings params args)
+          parent-env (if (= static-env ::runtime) runtime-env static-env)
+          new-env (mkenv self parent-env bindings)]
+      (peek (mapv (partial eval new-env) body)))))
 
 (defn mklet
   "Generates a function-based equivalent of the specified let binding
@@ -123,10 +124,11 @@
   has ::fexpr metadata."
   [op env args]
   (let [operator (eval env op)]
-    (apply operator (if (or (:ns (meta operator))
-                            (not (::fexpr (meta operator))))
-                      (mapv (partial eval env) args)
-                      args))))
+    (if (::fclj (meta operator))
+      (apply operator env (if (::fexpr (meta operator))
+                            args
+                            (mapv (partial eval env) args)))
+      (apply operator (mapv (partial eval env) args)))))
 
 (defn operation-form? [x]
   (boolean (or (list? x)
@@ -145,8 +147,10 @@
           def     (do (swap! *globals* assoc (first args) (eval env (second args)))
                       (first args))
           quote   (first args)
-          ffn     (with-meta (mkfn env args) {::fexpr true})
-          fn      (mkfn env args)
+          ffn     (with-meta (mkfn env args) {::fclj true, ::fexpr true})
+          fn      (with-meta (mkfn env args) {::fclj true})
+          fn*     (with-meta (mkfn ::runtime args) {::fclj true})
+          ffn*    (with-meta (mkfn ::runtime args) {::fclj true, ::fexpr true})
           let     (mklet env args)
           eval    (eval env (eval env (first args)))
           if      (let [[pred then else] args]
@@ -225,8 +229,7 @@
      (ffn [name params & body]
           (eval (list 'def name
                       (list 'eval
-                            (list 'ffn params
-                                  (cons 'eval body)))))))
+                            (list 'ffn params body))))))
 
    (def map
      (fn [f [x & xs]]
@@ -245,12 +248,12 @@
                        (list params (first body))
                        (cons params body)))))
 
-
    (defmacro deffn [name params & body]
      (list 'def name
            (cons 'ffn (if (= 1 (count body))
                         (list params (first body))
                         (cons params body)))))
+
 
    (deffn do* [last [x & exprs]]
      (if x (recur (eval x) exprs) last))
@@ -258,26 +261,34 @@
    (deffn do [& exprs]
      (eval (list 'do* nil exprs)))
 
-   (defn walk [inner outer form]
-     (if (list? form)
-       (outer (apply list (map inner form)))
-       (outer form)))
+   (deffn when [test & body]
+     (eval (list 'if test (cons 'do body))))
+
+   (def cond
+     (ffn* [& exprs]
+           (let [[test expr & more] exprs]
+             (if (eval test)
+               (eval expr)
+               (apply cond more)))))
 
    (defn partial [f & some-args]
      (fn [& args] (apply f (concat some-args args))))
 
-   (defn postwalk [f form]
-     (walk (partial postwalk f) f form))
+   (def mc91 (fn [n]
+               (cond (<= n 100) (mc91 (mc91 (+ n 11)))
+                     :else (- n 10))))
 
-   (def quasiquote
-     (ffn [form]
-          (postwalk (fn [x]
-                      (if (list? x)
-                        (if (= (first x) 'clojure.core/unquote)
-                          (eval (second x))
-                          x)
-                        x))
-                    form)))
+   (def mc91
+     (fn [n]
+       (let [])
+       (cond (<= n 100) (mc91 (mc91 (+ n 11)))
+             :else (- n 10))))
+
+   (def foo (ffn* [e] (eval e)))
+   (def bar (fn [x]
+              (fn [y]
+                (foo (+ x y)))))
+   ((bar 1) 2)
 
    )
   )
